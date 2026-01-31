@@ -23,17 +23,18 @@ public class RoutingConfig implements WebFluxConfigurer {
   public RouterFunction<ServerResponse> routerFunctions(SomeEntityHandler handler) {
     return RouterFunctions.nest(path("/api/someentity"),
         RouterFunctions.route()
-            // 1. GET requests (Open to browsers, curl, etc.)
+            // 1. GET requests
             .GET("/{id}", handler::getSomeEntity)
-            .GET("", r -> handler.listSomeEntities())
+            // FIX: Use method reference to pass ServerRequest automatically
+            .GET("", handler::listSomeEntities)
 
-            // 2. DELETE (No headers required)
+            // 2. DELETE
             .DELETE("/{id}", handler::deleteSomeEntity)
 
-            // 3. WRITE operations (Strictly enforce JSON input/output)
+            // 3. WRITE operations
             .nest(accept(APPLICATION_JSON).and(contentType(APPLICATION_JSON)), builder -> builder
                 .POST("", handler::createSomeEntity)
-                .POST("/all", handler::createSomeEntities) // Changed "all" to "/all" for clarity
+                .POST("/all", handler::createSomeEntities)
                 .PATCH("", handler::updateSomeEntity)
             )
             .build()
@@ -51,5 +52,4 @@ public class RoutingConfig implements WebFluxConfigurer {
       return super.getErrorAttributes(request, ErrorAttributeOptions.of(ErrorAttributeOptions.Include.MESSAGE));
     }
   }
-
 }

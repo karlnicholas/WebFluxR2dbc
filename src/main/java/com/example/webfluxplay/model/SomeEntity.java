@@ -2,32 +2,16 @@ package com.example.webfluxplay.model;
 
 import jakarta.validation.constraints.NotNull;
 
-public class SomeEntity {
-  private Long id;
+public record SomeEntity(Long id, @NotNull String svalue) {
 
-  @NotNull
-  private String svalue;
-
-  public Long getId() {
-    return id;
-  }
-
-  public void setId(Long id) {
-    this.id = id;
-  }
-
-  public String getSvalue() {
-    return svalue;
-  }
-
-  public void setSvalue(String svalue) {
-    this.svalue = svalue;
-  }
-
+  /**
+   * Merges this entity with an existing one.
+   * Since records are immutable, this returns a new instance.
+   */
   public SomeEntity merge(SomeEntity existingEntity) {
-    if (svalue == null) {
-      svalue = existingEntity.getSvalue();
-    }
-    return this;
+    // Use local svalue if present, otherwise fall back to existingEntity's value
+    String mergedSvalue = (this.svalue != null) ? this.svalue : existingEntity.svalue();
+
+    return new SomeEntity(this.id, mergedSvalue);
   }
 }

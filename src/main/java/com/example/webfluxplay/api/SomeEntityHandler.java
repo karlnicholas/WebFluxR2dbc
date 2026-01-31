@@ -16,55 +16,85 @@ import java.util.List;
 
 @Component
 public class SomeEntityHandler {
+
   private final Validator validator;
   private final SomeEntityDao dao;
 
-  public SomeEntityHandler(
-      Validator validator,
-      SomeEntityDao dao
-  ) {
+  public SomeEntityHandler(Validator validator, SomeEntityDao dao) {
     this.validator = validator;
     this.dao = dao;
   }
 
-  public Mono<ServerResponse> listSomeEntities() {
-    return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON)
+  // -----------------------------------------------------------------------
+  // READ
+  // -----------------------------------------------------------------------
+
+  public Mono<ServerResponse> listSomeEntities(ServerRequest request) {
+    return ServerResponse.ok()
+        .contentType(MediaType.APPLICATION_JSON)
         .body(dao.findAll(), SomeEntity.class);
   }
 
-  public Mono<ServerResponse> createSomeEntity(ServerRequest request) {
-    return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON)
-        .body(request.bodyToMono(SomeEntity.class)
-            .doOnNext(this::validate)
-            .flatMap(dao::save), SomeEntity.class);
-  }
-
-  // Better Readability & 404 Support
   public Mono<ServerResponse> getSomeEntity(ServerRequest request) {
-    return dao.findById(Long.valueOf(request.pathVariable("id")))
-        .flatMap(e -> ServerResponse.ok()
+    Long id = Long.valueOf(request.pathVariable("id"));
+
+    return dao.findById(id)
+        .flatMap(entity -> ServerResponse.ok()
             .contentType(MediaType.APPLICATION_JSON)
-            .bodyValue(e))
+            .bodyValue(entity))
         .switchIfEmpty(ServerResponse.notFound().build());
   }
 
-  // True Reactive Streaming
+  // -----------------------------------------------------------------------
+  // WRITE
+  // -----------------------------------------------------------------------
+
+  public Mono<ServerResponse> createSomeEntity(ServerRequest request) {
+    return request.bodyToMono(SomeEntity.class)
+        .doOnNext(this::validate)
+        .flatMap(dao::save)
+        .flatMap(saved -> ServerResponse.created(request.uriBuilder()
+                .path("/{id}").build(saved.id())) // Record accessor .id()
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue(saved));
+  }
+
   public Mono<ServerResponse> createSomeEntities(ServerRequest request) {
     return ServerResponse.ok()
         .contentType(MediaType.APPLICATION_JSON)
         .body(request.bodyToFlux(SomeEntity.class)
-            .buffer(50) // Batch size
+            .buffer(50) // Process in batches of 50
             .flatMap(batch -> {
               validateAll(batch);
               return dao.saveAll(batch);
             }), SomeEntity.class);
   }
 
+  public Mono<ServerResponse> updateSomeEntity(ServerRequest request) {
+    return request.bodyToMono(SomeEntity.class)
+        .doOnNext(this::validate)
+        .flatMap(updatePayload -> dao.findById(updatePayload.id()) // Record accessor
+            .switchIfEmpty(Mono.error(new ServerWebInputException("Entity not found")))
+            .flatMap(existing -> {
+              // Merge returns a NEW Record instance
+              SomeEntity merged = updatePayload.merge(existing);
+              return dao.save(merged);
+            })
+        )
+        .flatMap(saved -> ServerResponse.ok()
+            .contentType(MediaType.APPLICATION_JSON)
+            .bodyValue(saved));
+  }
+
   public Mono<ServerResponse> deleteSomeEntity(ServerRequest request) {
     Long id = Long.valueOf(request.pathVariable("id"));
     return dao.deleteById(id)
-        .then(ServerResponse.noContent().build()); // Return 204
+        .then(ServerResponse.noContent().build());
   }
+
+  // -----------------------------------------------------------------------
+  // VALIDATION
+  // -----------------------------------------------------------------------
 
   private void validate(SomeEntity someEntity) {
     Errors errors = new BeanPropertyBindingResult(someEntity, "SomeEntity");
@@ -75,20 +105,14 @@ public class SomeEntityHandler {
   }
 
   private void validateAll(List<SomeEntity> someEntities) {
-    Errors errors = new BeanPropertyBindingResult(someEntities, "SomeEntity");
-    someEntities.forEach(someEntity -> validator.validate(someEntity, errors));
+    // For lists, we just iterate and validate each
+    // Alternatively, you could use a custom List wrapper validator
+    Errors errors = new BeanPropertyBindingResult(someEntities, "SomeEntityList");
+    for (int i = 0; i < someEntities.size(); i++) {
+      validator.validate(someEntities.get(i), errors);
+    }
     if (errors.hasErrors()) {
       throw new ServerWebInputException(errors.toString());
     }
-  }
-
-  public Mono<ServerResponse> updateSomeEntity(ServerRequest request) {
-    return ServerResponse.ok().contentType(MediaType.APPLICATION_JSON)
-        .body(request.bodyToMono(SomeEntity.class)
-            .doOnNext(this::validate)
-            .flatMap(updateEntity -> dao.findById(updateEntity.getId())
-                .switchIfEmpty(Mono.error(new Exception("Entity not found")))
-                .map(updateEntity::merge))
-            .flatMap(dao::update), Long.class);
   }
 }

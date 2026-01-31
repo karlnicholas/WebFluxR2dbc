@@ -3,14 +3,17 @@ package com.example.webfluxplay.dao;
 import com.example.webfluxplay.model.SomeEntity;
 import io.r2dbc.pool.ConnectionPool;
 import io.r2dbc.pool.ConnectionPoolConfiguration;
-import io.r2dbc.spi.*;
+import io.r2dbc.spi.ConnectionFactories;
+import io.r2dbc.spi.ConnectionFactory;
+import io.r2dbc.spi.ConnectionFactoryOptions;
+import io.r2dbc.spi.Row;
+import io.r2dbc.spi.RowMetadata;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 
 import static io.r2dbc.h2.H2ConnectionFactoryProvider.H2_DRIVER;
@@ -19,129 +22,91 @@ import static io.r2dbc.spi.ConnectionFactoryOptions.*;
 
 @Service
 public final class SomeEntityDao {
-  private final ConnectionPool pooledConnection;
+
+  private final R2dbcDao dao;
 
   public SomeEntityDao() {
     ConnectionFactory connectionFactory = ConnectionFactories.get(ConnectionFactoryOptions.builder()
         .option(DRIVER, H2_DRIVER)
         .option(PASSWORD, "")
-//                .option(URL, "mem:test;DB_CLOSE_DELAY=-1;TRACE_LEVEL_FILE=4")
         .option(URL, "mem:test;DB_CLOSE_DELAY=-1")
-//                .option(URL, "tcp://localhost:9092/~/some_entity")
         .option(USER, "sa")
         .build());
-    ConnectionPoolConfiguration poolConfiguration = ConnectionPoolConfiguration
-        .builder(connectionFactory)
-        .initialSize(5)
-        .maxSize(10).maxIdleTime(Duration.ofMinutes(5)).build();
 
-    pooledConnection = new ConnectionPool(poolConfiguration);
+    ConnectionPoolConfiguration configuration = ConnectionPoolConfiguration.builder(connectionFactory)
+        .maxIdleTime(Duration.ofMinutes(30))
+        .initialSize(2)
+        .maxSize(10)
+        .build();
+
+    this.dao = new R2dbcDao(new ConnectionPool(configuration));
   }
 
-  public Mono<Long> createTable() {
-    return Mono.usingWhen(pooledConnection.create(), // allocates a connection from the pool
-        connection -> Mono.from(connection.createStatement("create table if not exists some_entity (id bigint not null generated always as IDENTITY, svalue varchar(255) not null, primary key (id))")
-            .execute()).flatMap(result -> Mono.from(result.getRowsUpdated())),
-        Connection::close);
+  public Flux<Long> createTable() {
+    String sql = "CREATE TABLE IF NOT EXISTS some_entity (id IDENTITY PRIMARY KEY, svalue VARCHAR(255))";
+    return dao.execute(sql);
   }
 
-  private final BiFunction<Row, RowMetadata, SomeEntity> mapper = (row, rowMetadata) -> {
-    SomeEntity someEntity = new SomeEntity();
-    someEntity.setId(row.get("id", Long.class));
-    someEntity.setSvalue(row.get("svalue", String.class));
-    return someEntity;
-  };
+  private final BiFunction<Row, RowMetadata, SomeEntity> mapper = (row, meta) ->
+      new SomeEntity(
+          row.get("id", Long.class),
+          row.get("svalue", String.class)
+      );
 
-  public Flux<SomeEntity> findAll() {
-    return Flux.usingWhen(pooledConnection.create(), // allocates a connection from the pool
-        connection -> Mono.from(connection.createStatement("select * from some_entity")
-                .execute())
-            .flatMapMany(result -> result.map(mapper)),
-        Connection::close);
-  }
+  // -----------------------------------------------------------------------
+  // CRUD OPERATIONS
+  // -----------------------------------------------------------------------
 
-  public Mono<SomeEntity> save(SomeEntity someEntity) {
-    return Mono.usingWhen(pooledConnection.create(), // allocates a connection from the pool
-        connection -> Mono.from(connection.createStatement("insert into some_entity(svalue) values ($1)")
-                .bind("$1", someEntity.getSvalue())
+  public Mono<SomeEntity> save(SomeEntity entity) {
+    return dao.withConnection(conn ->
+        Flux.from(conn.createStatement("INSERT INTO some_entity (svalue) VALUES ($1)")
+                .bind("$1", entity.svalue())
                 .returnGeneratedValues("id")
                 .execute())
-            .flatMap(result -> Mono.from(result.map((row, rowMetadata) -> {
-              someEntity.setId(row.get("id", Long.class));
-              return someEntity;
-            }))),
-        Connection::close);
+            .concatMap(result -> result.map((row, meta) ->
+                new SomeEntity(row.get("id", Long.class), entity.svalue())
+            ))
+    ).next();
   }
 
-  public Mono<Long> update(SomeEntity someEntity) {
-    return Mono.usingWhen(pooledConnection.create(), // allocates a connection from the pool
-        connection -> Mono.from(connection.createStatement("update some_entity set svalue = $1 where id = $2")
-                .bind("$1", someEntity.getSvalue())
-                .bind("$2", someEntity.getId())
-                .execute())
-            .flatMap(result -> Mono.from(result.getRowsUpdated())),
-        Connection::close);
-  }
-
-  public Mono<SomeEntity> findById(Long id) {
-    return Mono.usingWhen(pooledConnection.create(), // allocates a connection from the pool
-        connection -> Mono.from(connection.createStatement("select * from some_entity where id = $1")
-                .bind("$1", id)
-                .execute())
-            .flatMap(result -> Mono.from(result.map(mapper))),
-        Connection::close);
-  }
-
-  public Mono<Long> deleteById(Long id) {
-    return Mono.usingWhen(pooledConnection.create(), // allocates a connection from the pool
-        connection -> Mono.from(connection.createStatement("delete from some_entity where id = $1")
-                .bind("$1", id)
-                .execute())
-            .flatMap(res -> Mono.from(res.getRowsUpdated())),
-        Connection::close);
-  }
-
-  @SuppressWarnings("java:S3776")
-  public Flux<SomeEntity> saveAll(List<SomeEntity> someEntities) {
-    if (someEntities.isEmpty()) {
+  public Flux<SomeEntity> saveAll(List<SomeEntity> entities) {
+    if (entities.isEmpty()) {
       return Flux.empty();
     }
 
-    return Flux.usingWhen(pooledConnection.create(),
-        connection -> {
-          Statement s = connection.createStatement("insert into some_entity(svalue) values ($1)")
-              .returnGeneratedValues("id");
+    // Use the new Batch API for high-performance inserts
+    return dao.batch(
+            // 1. Factory: Enable generated keys
+            conn -> conn.createStatement("INSERT INTO some_entity (svalue) VALUES ($1)")
+                .returnGeneratedValues("id"),
 
-          for (int i = 0; i < someEntities.size(); i++) {
-            // 1. Bind the current entity
-            s.bind("$1", someEntities.get(i).getSvalue());
+            // 2. Data
+            entities,
 
-            // 2. ONLY call add() if there is another item coming.
-            // This prevents the "dangling empty row" error.
-            if (i < someEntities.size() - 1) {
-              s.add();
-            }
-          }
+            // 3. Binder: Map Entity -> Statement
+            (stmt, entity) -> stmt.bind("$1", entity.svalue()),
 
-          AtomicInteger indexTracker = new AtomicInteger(0);
+            // 4. Mapper: Extract ID from result
+            (row, meta) -> row.get("id", Long.class)
+        )
+        // 5. Recombine: Match generated IDs back to the original entities
+        // (R2DBC guarantees order of results matches order of inputs)
+        .zipWithIterable(entities, (id, originalEntity) ->
+            new SomeEntity(id, originalEntity.svalue())
+        );
+  }
 
-          return Flux.from(s.execute())
-              .concatMap(result ->
-                  result.map((row, rowMetadata) -> {
-                    int idx = indexTracker.getAndIncrement();
-                    if (idx < someEntities.size()) {
-                      SomeEntity entity = someEntities.get(idx);
-                      Long id = row.get("id", Long.class);
-                      if (id != null) {
-                        entity.setId(id);
-                      }
-                      return entity;
-                    } else {
-                      return someEntities.get(someEntities.size() - 1);
-                    }
-                  })
-              );
-        },
-        Connection::close);
+  public Mono<SomeEntity> findById(Long id) {
+    return dao.select("SELECT id, svalue FROM some_entity WHERE id = $1", mapper, id)
+        .next();
+  }
+
+  public Flux<SomeEntity> findAll() {
+    return dao.select("SELECT id, svalue FROM some_entity", mapper);
+  }
+
+  public Mono<Void> deleteById(Long id) {
+    return dao.execute("DELETE FROM some_entity WHERE id = $1", id)
+        .then();
   }
 }

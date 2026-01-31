@@ -13,6 +13,8 @@ import org.springframework.context.event.EventListener;
 @Slf4j
 public class WebfluxplayApplication {
 
+  private final SomeEntityDao dao;
+
   public WebfluxplayApplication(SomeEntityDao dao) {
     this.dao = dao;
   }
@@ -21,12 +23,12 @@ public class WebfluxplayApplication {
     SpringApplication.run(WebfluxplayApplication.class, args);
   }
 
-
-  private final SomeEntityDao dao;
-
   @EventListener(ApplicationReadyEvent.class)
   public void doSomethingAfterStartup() {
-    dao.createTable().subscribe(i -> log.info("Table created: " + i));
+    dao.createTable()
+        .subscribe(
+            i -> log.info("Table created. Rows updated: " + i),
+            err -> log.error("Failed to create table", err)
+        );
   }
-
 }
