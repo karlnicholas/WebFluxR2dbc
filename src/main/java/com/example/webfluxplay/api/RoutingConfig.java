@@ -19,32 +19,37 @@ import static org.springframework.web.reactive.function.server.RequestPredicates
 @Configuration
 @EnableWebFlux
 public class RoutingConfig implements WebFluxConfigurer {
-    @Bean
-    public RouterFunction<ServerResponse> routerFunctions(SomeEntityHandler handler) {
-        return RouterFunctions.nest(path("/api/someentity"),
-                RouterFunctions.nest(accept(APPLICATION_JSON),
-                                RouterFunctions.route(GET("/{id}"), handler::getSomeEntity)
-                                        .andRoute(GET(""), r -> handler.listSomeEntities())
-                                        .andNest(contentType(APPLICATION_JSON),
-                                                RouterFunctions.route(POST(""), handler::createSomeEntity)
-                                                        .andRoute(POST("all"), handler::createSomeEntities)
-                                                        .andRoute(PATCH(""), handler::updateSomeEntity)
-                                        )
-                        )
-                        .andRoute(DELETE("/{id}"), handler::deleteSomeEntity)
-        );
-    }
+  @Bean
+  public RouterFunction<ServerResponse> routerFunctions(SomeEntityHandler handler) {
+    return RouterFunctions.nest(path("/api/someentity"),
+        RouterFunctions.route()
+            // 1. GET requests (Open to browsers, curl, etc.)
+            .GET("/{id}", handler::getSomeEntity)
+            .GET("", r -> handler.listSomeEntities())
 
-    @Bean
-    public DefaultErrorAttributes errorAttributes() {
-        return new MessageErrorAttributes();
-    }
+            // 2. DELETE (No headers required)
+            .DELETE("/{id}", handler::deleteSomeEntity)
 
-    static class MessageErrorAttributes extends DefaultErrorAttributes {
-        @Override
-        public Map<String, Object> getErrorAttributes(ServerRequest request, ErrorAttributeOptions options) {
-            return super.getErrorAttributes(request, ErrorAttributeOptions.of(ErrorAttributeOptions.Include.MESSAGE));
-        }
+            // 3. WRITE operations (Strictly enforce JSON input/output)
+            .nest(accept(APPLICATION_JSON).and(contentType(APPLICATION_JSON)), builder -> builder
+                .POST("", handler::createSomeEntity)
+                .POST("/all", handler::createSomeEntities) // Changed "all" to "/all" for clarity
+                .PATCH("", handler::updateSomeEntity)
+            )
+            .build()
+    );
+  }
+
+  @Bean
+  public DefaultErrorAttributes errorAttributes() {
+    return new MessageErrorAttributes();
+  }
+
+  static class MessageErrorAttributes extends DefaultErrorAttributes {
+    @Override
+    public Map<String, Object> getErrorAttributes(ServerRequest request, ErrorAttributeOptions options) {
+      return super.getErrorAttributes(request, ErrorAttributeOptions.of(ErrorAttributeOptions.Include.MESSAGE));
     }
+  }
 
 }
