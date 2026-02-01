@@ -7,12 +7,14 @@ import reactor.core.publisher.Mono;
 import reactor.util.annotation.Nullable;
 
 import java.util.Iterator;
+import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
  * A minimalist R2DBC Data Access Object.
+ * Updates: Added 'IsolationLevel' overload for inTransaction.
  */
 public class R2dbcDao {
 
@@ -23,6 +25,10 @@ public class R2dbcDao {
     this.connectionFactory = connectionFactory;
   }
 
+  // -------------------------------------------------------------------------
+  // 1. Core Lifecycle Management
+  // -------------------------------------------------------------------------
+
   public <T> Flux<T> withConnection(Function<Connection, ? extends Publisher<T>> action) {
     return Flux.usingWhen(
         connectionFactory.create(),
@@ -31,58 +37,99 @@ public class R2dbcDao {
     );
   }
 
+  // Standard Transaction
   public <T> Flux<T> inTransaction(Function<Connection, ? extends Publisher<T>> action) {
-    return withConnection(conn ->
-        Mono.from(conn.beginTransaction())
-            .thenMany(Flux.from(action.apply(conn)))
-            .concatWith(Flux.defer(() -> Mono.from(conn.commitTransaction()).then(Mono.empty())))
-            .onErrorResume(e -> Mono.from(conn.rollbackTransaction()).then(Mono.error(e)))
-    );
+    return inTransaction(null, action);
   }
 
-  public Flux<Long> execute(String sql, Object... parameters) {
+  // FIX: Added Overload for IsolationLevel
+  public <T> Flux<T> inTransaction(@Nullable IsolationLevel isolationLevel,
+                                   Function<Connection, ? extends Publisher<T>> action) {
     return withConnection(conn -> {
-      Statement statement = conn.createStatement(sql);
-      bindParameters(statement, parameters);
-      return Flux.from(statement.execute()).concatMap(Result::getRowsUpdated);
+      // 1. Setup Isolation (if requested)
+      Mono<Void> setup = (isolationLevel != null)
+          ? Mono.from(conn.setTransactionIsolationLevel(isolationLevel))
+          : Mono.empty();
+
+      // 2. Begin -> Action -> Commit (or Rollback on error)
+      return setup.then(Mono.from(conn.beginTransaction()))
+          .thenMany(Flux.from(action.apply(conn)))
+          .concatWith(Flux.defer(() -> Mono.from(conn.commitTransaction()).then(Mono.empty())))
+          .onErrorResume(e -> Mono.from(conn.rollbackTransaction()).then(Mono.error(e)));
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // 2. Convenience Methods (Auto-manage Connection)
+  // -------------------------------------------------------------------------
+
+  public Flux<Long> execute(String sql, Object... parameters) {
+    return withConnection(conn -> execute(conn, sql, parameters));
   }
 
   public <T> Flux<T> select(String sql, BiFunction<Row, RowMetadata, T> mapper, Object... parameters) {
-    return withConnection(conn -> {
-      Statement statement = conn.createStatement(sql);
-      bindParameters(statement, parameters);
-      return Flux.from(statement.execute()).concatMap(result -> result.map(mapper));
-    });
+    return withConnection(conn -> select(conn, sql, mapper, parameters));
   }
 
-  // -------------------------------------------------------------------------
-  // High-Performance Batch Support
-  // -------------------------------------------------------------------------
+  public Flux<Long> execute(String sql, Map<String, Object> parameters) {
+    return withConnection(conn -> execute(conn, sql, parameters));
+  }
 
-  /**
-   * Executes a batch update/insert returning the number of affected rows.
-   * Used for bulk operations where generated keys are not needed.
-   */
+  public <T> Flux<T> select(String sql, BiFunction<Row, RowMetadata, T> mapper, Map<String, Object> parameters) {
+    return withConnection(conn -> select(conn, sql, mapper, parameters));
+  }
+
   public <T> Flux<Long> batch(String sql, Iterable<T> items, BiConsumer<Statement, T> binder) {
-    return withConnection(conn ->
-        Flux.from(prepareBatch(conn, c -> c.createStatement(sql), items, binder).execute())
-            .concatMap(Result::getRowsUpdated)
-    );
+    return withConnection(conn -> batch(conn, sql, items, binder));
   }
 
-  /**
-   * Executes a batch insert and maps the results (e.g. generated keys).
-   * Used by SomeEntityDao.saveAll.
-   */
   public <T, R> Flux<R> batch(Function<Connection, Statement> statementFactory,
                               Iterable<T> items,
                               BiConsumer<Statement, T> binder,
                               BiFunction<Row, RowMetadata, R> mapper) {
-    return withConnection(conn ->
-        Flux.from(prepareBatch(conn, statementFactory, items, binder).execute())
-            .concatMap(result -> result.map(mapper))
-    );
+    return withConnection(conn -> batch(conn, statementFactory, items, binder, mapper));
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. Composable Operations (Take existing Connection)
+  // -------------------------------------------------------------------------
+
+  public Flux<Long> execute(Connection conn, String sql, Object... parameters) {
+    Statement statement = conn.createStatement(sql);
+    bindParameters(statement, parameters);
+    return Flux.from(statement.execute()).concatMap(Result::getRowsUpdated);
+  }
+
+  public <T> Flux<T> select(Connection conn, String sql, BiFunction<Row, RowMetadata, T> mapper, Object... parameters) {
+    Statement statement = conn.createStatement(sql);
+    bindParameters(statement, parameters);
+    return Flux.from(statement.execute()).concatMap(result -> result.map(mapper));
+  }
+
+  public Flux<Long> execute(Connection conn, String sql, Map<String, Object> parameters) {
+    Statement statement = conn.createStatement(sql);
+    bindNamedParameters(statement, parameters);
+    return Flux.from(statement.execute()).concatMap(Result::getRowsUpdated);
+  }
+
+  public <T> Flux<T> select(Connection conn, String sql, BiFunction<Row, RowMetadata, T> mapper, Map<String, Object> parameters) {
+    Statement statement = conn.createStatement(sql);
+    bindNamedParameters(statement, parameters);
+    return Flux.from(statement.execute()).concatMap(result -> result.map(mapper));
+  }
+
+  public <T> Flux<Long> batch(Connection conn, String sql, Iterable<T> items, BiConsumer<Statement, T> binder) {
+    return Flux.from(prepareBatch(conn, c -> c.createStatement(sql), items, binder).execute())
+        .concatMap(Result::getRowsUpdated);
+  }
+
+  public <T, R> Flux<R> batch(Connection conn,
+                              Function<Connection, Statement> statementFactory,
+                              Iterable<T> items,
+                              BiConsumer<Statement, T> binder,
+                              BiFunction<Row, RowMetadata, R> mapper) {
+    return Flux.from(prepareBatch(conn, statementFactory, items, binder).execute())
+        .concatMap(result -> result.map(mapper));
   }
 
   // -------------------------------------------------------------------------
@@ -95,14 +142,10 @@ public class R2dbcDao {
                                      BiConsumer<Statement, T> binder) {
     Statement statement = factory.apply(conn);
     Iterator<T> iterator = items.iterator();
-
-    // Loop logic: Only call add() if we are moving to a NEW item after the first
     boolean first = true;
     while (iterator.hasNext()) {
       T item = iterator.next();
-      if (!first) {
-        statement.add();
-      }
+      if (!first) statement.add();
       binder.accept(statement, item);
       first = false;
     }
@@ -119,5 +162,16 @@ public class R2dbcDao {
         statement.bindNull(i, String.class);
       }
     }
+  }
+
+  private void bindNamedParameters(Statement statement, @Nullable Map<String, Object> parameters) {
+    if (parameters == null) return;
+    parameters.forEach((name, value) -> {
+      if (value != null) {
+        statement.bind(name, value);
+      } else {
+        statement.bindNull(name, String.class);
+      }
+    });
   }
 }

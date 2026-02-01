@@ -54,7 +54,7 @@ public class SomeEntityHandler {
         .doOnNext(this::validate)
         .flatMap(dao::save)
         .flatMap(saved -> ServerResponse.created(request.uriBuilder()
-                .path("/{id}").build(saved.id())) // Record accessor .id()
+                .path("/{id}").build(saved.getId())) // Record accessor .id()
             .contentType(MediaType.APPLICATION_JSON)
             .bodyValue(saved));
   }
@@ -73,17 +73,12 @@ public class SomeEntityHandler {
   public Mono<ServerResponse> updateSomeEntity(ServerRequest request) {
     return request.bodyToMono(SomeEntity.class)
         .doOnNext(this::validate)
-        .flatMap(updatePayload -> dao.findById(updatePayload.id()) // Record accessor
-            .switchIfEmpty(Mono.error(new ServerWebInputException("Entity not found")))
-            .flatMap(existing -> {
-              // Merge returns a NEW Record instance
-              SomeEntity merged = updatePayload.merge(existing);
-              return dao.save(merged);
-            })
-        )
+        // Delegate to the atomic DAO method
+        .flatMap(dao::update)
         .flatMap(saved -> ServerResponse.ok()
             .contentType(MediaType.APPLICATION_JSON)
-            .bodyValue(saved));
+            .bodyValue(saved))
+        .onErrorResume(IllegalArgumentException.class, e -> ServerResponse.notFound().build());
   }
 
   public Mono<ServerResponse> deleteSomeEntity(ServerRequest request) {
