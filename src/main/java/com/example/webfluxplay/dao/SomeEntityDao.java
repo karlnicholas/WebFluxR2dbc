@@ -21,9 +21,14 @@ import static io.r2dbc.spi.ConnectionFactoryOptions.*;
 public final class SomeEntityDao {
 
   private final R2dbcDao dao;
+  private final BiFunction<Row, RowMetadata, SomeEntity> mapper = (row, meta) -> {
+    SomeEntity someEntity = new SomeEntity();
+    someEntity.setId(row.get("id", Long.class));
+    someEntity.setSvalue(row.get("svalue", String.class));
+    return someEntity;
+  };
 
   public SomeEntityDao() {
-    // (Configuration code remains the same...)
     ConnectionFactory connectionFactory = ConnectionFactories.get(ConnectionFactoryOptions.builder()
         .option(DRIVER, H2_DRIVER)
         .option(PASSWORD, "")
@@ -45,37 +50,24 @@ public final class SomeEntityDao {
     return dao.execute(sql);
   }
 
-  private final BiFunction<Row, RowMetadata, SomeEntity> mapper = (row, meta) -> {
-    SomeEntity someEntity = new SomeEntity();
-    someEntity.setId(row.get("id", Long.class));
-    someEntity.setSvalue(row.get("svalue", String.class));
-    return someEntity;
-  };
-
   // -----------------------------------------------------------------------
-  // NEW: Transactional Business Logic
+  // Transactional Business Logic
   // -----------------------------------------------------------------------
 
-  /**
-   * Atomically updates an entity.
-   * Prevents race conditions by locking the read and write in one transaction.
-   */
   public Mono<SomeEntity> update(SomeEntity payload) {
     return dao.inTransaction(IsolationLevel.READ_COMMITTED, conn ->
-        // 1. Read (using the shared connection)
         findById(conn, payload.getId())
             .switchIfEmpty(Mono.error(new IllegalArgumentException("Entity not found")))
             .flatMap(existing -> {
-              // 2. Modify
               SomeEntity merged = payload.merge(existing);
-              // 3. Write (using the shared connection)
-              return save(conn, merged);
+              // We must allow the stream to complete for the transaction to commit.
+              return updateRow(conn, merged).thenReturn(merged);
             })
-    ).next(); // inTransaction returns Flux, we want Mono
+    ).single(); // single() to ensure commit execution
   }
 
   // -----------------------------------------------------------------------
-  // Composable Helpers (Accept Connection)
+  // Composable Helpers
   // -----------------------------------------------------------------------
 
   private Mono<SomeEntity> findById(Connection conn, Long id) {
@@ -83,9 +75,15 @@ public final class SomeEntityDao {
         .next();
   }
 
+  private Mono<Long> updateRow(Connection conn, SomeEntity entity) {
+    return dao.execute(conn,
+        "UPDATE some_entity SET svalue = $1 WHERE id = $2",
+        entity.getSvalue(),
+        entity.getId()
+    ).next();
+  }
+
   private Mono<SomeEntity> save(Connection conn, SomeEntity entity) {
-    // We use 'batch' even for a single item because it allows
-    // us to use the generated keys factory logic cleanly.
     return dao.batch(conn,
             c -> c.createStatement("INSERT INTO some_entity (svalue) VALUES ($1)").returnGeneratedValues("id"),
             Collections.singletonList(entity),
@@ -100,7 +98,7 @@ public final class SomeEntityDao {
   }
 
   // -----------------------------------------------------------------------
-  // Public Facades (Manage Connection Lifecycle)
+  // Public Facades
   // -----------------------------------------------------------------------
 
   public Mono<SomeEntity> save(SomeEntity entity) {
@@ -109,8 +107,6 @@ public final class SomeEntityDao {
 
   public Flux<SomeEntity> saveAll(List<SomeEntity> entities) {
     if (entities.isEmpty()) return Flux.empty();
-
-    // This can also be wrapped in dao.inTransaction if "All or Nothing" is required
     return dao.batch(
             conn -> conn.createStatement("INSERT INTO some_entity (svalue) VALUES ($1)").returnGeneratedValues("id"),
             entities,
