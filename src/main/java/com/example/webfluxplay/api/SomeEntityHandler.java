@@ -1,6 +1,7 @@
 package com.example.webfluxplay.api;
 
 import com.example.webfluxplay.dao.SomeEntityDao;
+import com.example.webfluxplay.dao.SomeEntityMsDao;
 import com.example.webfluxplay.model.SomeEntity;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -18,9 +19,9 @@ import java.util.List;
 public class SomeEntityHandler {
 
   private final Validator validator;
-  private final SomeEntityDao dao;
+  private final SomeEntityMsDao dao;
 
-  public SomeEntityHandler(Validator validator, SomeEntityDao dao) {
+  public SomeEntityHandler(Validator validator, SomeEntityMsDao dao) {
     this.validator = validator;
     this.dao = dao;
   }

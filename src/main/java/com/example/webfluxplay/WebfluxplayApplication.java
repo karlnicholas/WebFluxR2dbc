@@ -1,6 +1,7 @@
 package com.example.webfluxplay;
 
 import com.example.webfluxplay.dao.SomeEntityDao;
+import com.example.webfluxplay.dao.SomeEntityMsDao;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -13,9 +14,9 @@ import org.springframework.context.event.EventListener;
 @Slf4j
 public class WebfluxplayApplication {
 
-  private final SomeEntityDao dao;
+  private final SomeEntityMsDao dao;
 
-  public WebfluxplayApplication(SomeEntityDao dao) {
+  public WebfluxplayApplication(SomeEntityMsDao dao) {
     this.dao = dao;
   }
 
