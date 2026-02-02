@@ -1,6 +1,7 @@
 package com.example.webfluxplay.dao;
 
 import com.example.webfluxplay.model.SomeEntity;
+import io.r2dbc.dao.R2dbcDao;
 import io.r2dbc.pool.ConnectionPool;
 import io.r2dbc.pool.ConnectionPoolConfiguration;
 import io.r2dbc.spi.*;
