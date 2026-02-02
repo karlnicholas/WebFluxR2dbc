@@ -8,6 +8,7 @@ class WebfluxplayApplicationTests {
 
     @Test
     void contextLoads() {
+        // If this method runs, the Spring Context (beans, config, etc.) loaded successfully.
     }
 
 }
