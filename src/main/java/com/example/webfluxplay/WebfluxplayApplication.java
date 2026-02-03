@@ -1,7 +1,6 @@
 package com.example.webfluxplay;
 
 import com.example.webfluxplay.dao.SomeEntityDao;
-import com.example.webfluxplay.dao.SomeEntityMsDao;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -14,9 +13,9 @@ import org.springframework.context.event.EventListener;
 @Slf4j
 public class WebfluxplayApplication {
 
-  private final SomeEntityMsDao dao;
+  private final SomeEntityDao dao;
 
-  public WebfluxplayApplication(SomeEntityMsDao dao) {
+  public WebfluxplayApplication(SomeEntityDao dao) {
     this.dao = dao;
   }
 
@@ -26,10 +25,12 @@ public class WebfluxplayApplication {
 
   @EventListener(ApplicationReadyEvent.class)
   public void doSomethingAfterStartup() {
+    log.info("App started. Initializing database..."); // 1. Verify the listener runs
+
     dao.createTable()
-        .subscribe(
-            i -> log.info("Table created. Rows updated: " + i),
-            err -> log.error("Failed to create table", err)
-        );
+        .doOnNext(i -> log.info("Rows updated: " + i))
+        .doOnComplete(() -> log.info("Table creation completed successfully.")) // 2. Handle empty success
+        .doOnError(err -> log.error("Failed to create table", err))
+        .blockLast(); // 3. Block to keep the main thread alive for this task
   }
 }

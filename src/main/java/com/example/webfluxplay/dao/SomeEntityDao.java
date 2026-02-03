@@ -31,26 +31,26 @@ public final class SomeEntityDao {
 
   // r2dbc:mssql://reactnonreact:reactnonreact@localhost:1433/reactnonreact
   public SomeEntityDao() {
-//    ConnectionFactory connectionFactory = ConnectionFactories.get(ConnectionFactoryOptions.builder()
-//        .option(DRIVER, H2_DRIVER)
-//        .option(PASSWORD, "")
-//        .option(URL, "mem:test;DB_CLOSE_DELAY=-1")
-//        .option(USER, "sa")
-//        .build());
+    ConnectionFactory connectionFactory = ConnectionFactories.get(ConnectionFactoryOptions.builder()
+        .option(DRIVER, H2_DRIVER)
+        .option(PASSWORD, "")
+        .option(URL, "mem:test;DB_CLOSE_DELAY=-1")
+        .option(USER, "sa")
+        .build());
 
-  ConnectionFactory connectionFactory = ConnectionFactories.get(ConnectionFactoryOptions.builder()
-          .option(DRIVER, "mssql")
-          .option(HOST, "localhost")
-          .option(PORT, 1433)
-          .option(USER, "reactnonreact")
-          .option(PASSWORD, "reactnonreact")
-          .option(DATABASE, "reactnonreact")
-          // .option(URL, "r2dbc:mssql://localhost:1433/reactnonreact") // URL option is not recommended when using builder
-          // Fix for "PKIX path building failed" on local instances:
-          .option(Option.valueOf("encrypt"), "false")
-          // Alternatively, if you need encryption but want to trust the self-signed cert:
-          // .option(Option.valueOf("trustServerCertificate"), "true")
-          .build());
+//  ConnectionFactory connectionFactory = ConnectionFactories.get(ConnectionFactoryOptions.builder()
+//          .option(DRIVER, "mssql")
+//          .option(HOST, "localhost")
+//          .option(PORT, 1433)
+//          .option(USER, "reactnonreact")
+//          .option(PASSWORD, "reactnonreact")
+//          .option(DATABASE, "reactnonreact")
+//          // .option(URL, "r2dbc:mssql://localhost:1433/reactnonreact") // URL option is not recommended when using builder
+//          // Fix for "PKIX path building failed" on local instances:
+//          .option(Option.valueOf("encrypt"), "false")
+//          // Alternatively, if you need encryption but want to trust the self-signed cert:
+//          // .option(Option.valueOf("trustServerCertificate"), "true")
+//          .build());
 
   ConnectionPoolConfiguration configuration = ConnectionPoolConfiguration.builder(connectionFactory)
         .maxIdleTime(Duration.ofMinutes(30))
